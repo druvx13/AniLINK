@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AniLINK Standalone Extractor</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-2: #1f2630;
+      --text: #e6edf3;
+      --muted: #9ba8b4;
+      --accent: #3fb950;
+      --danger: #f85149;
+      --warn: #d29922;
+      --border: #30363d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, sans-serif;
+      background: linear-gradient(180deg, #0b0f14 0%, #0d1117 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      gap: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    h1 { margin: 0 0 8px; font-size: 1.2rem; }
+    p { margin: 4px 0; color: var(--muted); }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    input[type="url"] {
+      width: 100%;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.96rem;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #212a35;
+      color: var(--text);
+      padding: 9px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button.primary { background: #1f6feb; }
+    button.success { background: #1f8f3e; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status {
+      min-height: 24px;
+      font-size: 0.9rem;
+      color: var(--muted);
+      word-break: break-word;
+    }
+    .status.error { color: var(--danger); }
+    .status.warn { color: var(--warn); }
+    .status.ok { color: var(--accent); }
+    .output {
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .output-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      background: #11161d;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .output-body {
+      background: #0f141b;
+      padding: 10px;
+      min-height: 180px;
+      max-height: 50vh;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
+      font-size: 0.86rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .links {
+      margin-top: 8px;
+      display: grid;
+      gap: 8px;
+    }
+    .link-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: #0f141b;
+    }
+    .link-item b { color: #8bcbff; }
+    .link-item a {
+      color: #79c0ff;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    @media (min-width: 760px) {
+      .row { grid-template-columns: 1fr auto; }
+      .row > .controls { justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="card">
+      <h1>AniLINK Standalone Extractor</h1>
+      <p>Enter an anime episode/stream page URL, then extract available media links.</p>
+      <p>This app is self-contained and has no external code dependencies.</p>
+    </section>
+
+    <section class="card">
+      <label for="urlInput">Target URL</label>
+      <div class="row">
+        <input id="urlInput" type="url" placeholder="https://example.com/watch/episode-1" autocomplete="off" />
+        <div class="controls">
+          <button id="processBtn" class="primary">Process</button>
+          <button id="clearBtn">Clear</button>
+          <button id="copyBtn" class="success">Copy Output</button>
+        </div>
+      </div>
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <div class="output">
+        <div class="output-head">
+          <span>Dynamic Output</span>
+          <span id="countInfo">0 links</span>
+        </div>
+        <div id="outputBody" class="output-body"></div>
+      </div>
+      <div id="linksView" class="links"></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      "use strict";
+
+      /**
+       * Core adapted model from the userscript:
+       * A normalized episode object with source links and metadata.
+       */
+      class Episode {
+        constructor(number, animeTitle, links, thumbnail = "", epTitle = "") {
+          this.number = String(number || "1");
+          this.animeTitle = animeTitle || "Unknown Title";
+          this.epTitle = epTitle || "";
+          this.links = this.#normalizeLinks(links || {});
+          this.thumbnail = thumbnail || "";
+          this.filename = `${this.animeTitle} - ${this.number.padStart(3, "0")}${this.epTitle ? ` - ${this.epTitle}` : ""}`;
+        }
+
+        #normalizeLinks(links) {
+          const out = {};
+          for (const [name, linkObj] of Object.entries(links)) {
+            if (!linkObj || typeof linkObj !== "object") continue;
+            const cleaned = { ...linkObj };
+            cleaned.type = normalizeType(cleaned.type);
+            cleaned.stream = safeAbsoluteUrl(cleaned.stream) || "";
+            if (!cleaned.stream) continue;
+            cleaned.referer = safeAbsoluteUrl(cleaned.referer) || "";
+            cleaned.tracks = Array.isArray(cleaned.tracks)
+              ? cleaned.tracks
+                  .map((t) => ({
+                    file: safeAbsoluteUrl(t?.file) || "",
+                    kind: /^(caption|subtitle)s?$/i.test(t?.kind || "") ? "caption" : String(t?.kind || "unknown"),
+                    label: String(t?.label || "")
+                  }))
+                  .filter((t) => t.file)
+              : [];
+            out[String(name || "Source")] = cleaned;
+          }
+          return out;
+        }
+      }
+
+      const ui = {
+        input: document.getElementById("urlInput"),
+        processBtn: document.getElementById("processBtn"),
+        clearBtn: document.getElementById("clearBtn"),
+        copyBtn: document.getElementById("copyBtn"),
+        status: document.getElementById("status"),
+        output: document.getElementById("outputBody"),
+        linksView: document.getElementById("linksView"),
+        countInfo: document.getElementById("countInfo")
+      };
+
+      let lastOutputText = "";
+
+      ui.processBtn.addEventListener("click", handleProcess);
+      ui.clearBtn.addEventListener("click", clearAll);
+      ui.copyBtn.addEventListener("click", copyOutput);
+      ui.input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") handleProcess();
+      });
+
+      async function handleProcess() {
+        const url = validateUserUrl(ui.input.value);
+        if (!url.ok) {
+          setStatus(url.error, "error");
+          return;
+        }
+
+        toggleBusy(true);
+        clearOutputOnly();
+        setStatus("Fetching page...", "warn");
+
+        try {
+          const html = await fetchHtmlWithCorsFallback(url.value);
+          setStatus("Parsing and extracting links...", "warn");
+          const extraction = extractFromHtml(html, url.value);
+
+          if (!extraction.links.length) {
+            setStatus("No media links detected. The page may need JS rendering or blocks cross-origin fetch.", "warn");
+          } else {
+            setStatus(`Extraction completed: ${extraction.links.length} link(s) found.`, "ok");
+          }
+
+          const episode = new Episode(
+            extraction.epNumber,
+            extraction.title,
+            extraction.links.reduce((acc, l, idx) => {
+              acc[l.source || `Source ${idx + 1}`] = {
+                stream: l.url,
+                type: l.type,
+                referer: url.value,
+                tracks: []
+              };
+              return acc;
+            }, {}),
+            extraction.thumbnail,
+            extraction.epTitle
+          );
+
+          renderEpisode(episode, extraction.debugNotes);
+        } catch (error) {
+          setStatus(getReadableError(error), "error");
+          writeTextOutput(`[Error]\n${getReadableError(error)}\n\nTip: Try a different URL or a CORS-friendly endpoint.`);
+        } finally {
+          toggleBusy(false);
+        }
+      }
+
+      /**
+       * Fetches HTML directly; if blocked by CORS, falls back to allorigins proxy.
+       */
+      async function fetchHtmlWithCorsFallback(url) {
+        try {
+          const direct = await fetch(url, {
+            method: "GET",
+            mode: "cors",
+            credentials: "omit",
+            redirect: "follow"
+          });
+          if (!direct.ok) throw new Error(`HTTP ${direct.status}`);
+          return await direct.text();
+        } catch (directErr) {
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+          const proxy = await fetch(proxyUrl, { method: "GET", mode: "cors", credentials: "omit" });
+          if (!proxy.ok) {
+            throw new Error(
+              `Unable to fetch URL due to CORS/network restrictions. Direct: ${String(directErr?.message || directErr)} | Proxy HTTP ${proxy.status}`
+            );
+          }
+          return await proxy.text();
+        }
+      }
+
+      /**
+       * Core extraction logic adapted for standalone execution:
+       * - Parse media links from anchors, video/source tags, and inline scripts.
+       * - Keep output normalized similarly to userscript Episode.links.
+       */
+      function extractFromHtml(html, sourceUrl) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(String(html || ""), "text/html");
+        const base = safeAbsoluteUrl(sourceUrl);
+        const debugNotes = [];
+
+        const title = (doc.querySelector("meta[property='og:title']")?.content || doc.title || "Unknown Title").trim();
+        const epTitle = (doc.querySelector("h1")?.textContent || "").trim();
+        const epNumber = detectEpisodeNumber(sourceUrl, title, epTitle);
+        const thumbnail = safeAbsoluteUrl(doc.querySelector("meta[property='og:image']")?.content || "") || "";
+
+        const found = new Map();
+        const pushLink = (rawUrl, source, typeGuess = "") => {
+          const abs = safeAbsoluteUrl(rawUrl, base);
+          if (!abs || !isLikelyMediaUrl(abs, typeGuess)) return;
+          if (found.has(abs)) return;
+          found.set(abs, { url: abs, source: source || "Detected", type: normalizeType(typeGuess || extFromUrl(abs)) });
+        };
+
+        // 1) Common anchor/download links
+        for (const a of doc.querySelectorAll("a[href]")) {
+          const href = a.getAttribute("href");
+          const text = (a.textContent || "").trim().slice(0, 100);
+          pushLink(href, text || "Anchor", extFromUrl(href || ""));
+        }
+
+        // 2) Video tags
+        for (const v of doc.querySelectorAll("video")) {
+          if (v.getAttribute("src")) pushLink(v.getAttribute("src"), "Video", extFromUrl(v.getAttribute("src")));
+          for (const s of v.querySelectorAll("source[src]")) {
+            const t = s.getAttribute("type") || extFromUrl(s.getAttribute("src") || "");
+            pushLink(s.getAttribute("src"), "Video Source", t);
+          }
+        }
+
+        // 3) Script-based URLs
+        const mediaUrlPattern = /https?:\/\/[^\s"'`<>]+?\.(m3u8|mp4|mpd)(\?[^\s"'`<>]*)?/gi;
+        for (const script of doc.querySelectorAll("script")) {
+          const txt = script.textContent || "";
+          let m;
+          while ((m = mediaUrlPattern.exec(txt)) !== null) {
+            const u = m[0];
+            pushLink(u, "Script", m[1]);
+          }
+        }
+
+        // 4) iframes (embed endpoints)
+        for (const frame of doc.querySelectorAll("iframe[src]")) {
+          const src = frame.getAttribute("src");
+          pushLink(src, "Embed", "embed");
+        }
+
+        const links = Array.from(found.values());
+        if (!links.length) debugNotes.push("No direct .m3u8/.mp4/.mpd/embed links found in static HTML.");
+        if (links.some((l) => l.type === "embed")) {
+          debugNotes.push("Embed links may require opening the embed URL and re-running extraction.");
+        }
+
+        return { title, epTitle, epNumber, thumbnail, links, debugNotes };
+      }
+
+      function renderEpisode(episode, debugNotes = []) {
+        const serializable = {
+          animeTitle: episode.animeTitle,
+          episodeNumber: episode.number,
+          episodeTitle: episode.epTitle,
+          thumbnail: episode.thumbnail,
+          filename: episode.filename,
+          links: episode.links
+        };
+
+        const outputText = JSON.stringify(serializable, null, 2) + (debugNotes.length ? `\n\nNotes:\n- ${debugNotes.join("\n- ")}` : "");
+        lastOutputText = outputText;
+        writeTextOutput(outputText);
+
+        const entries = Object.entries(episode.links);
+        ui.countInfo.textContent = `${entries.length} link${entries.length === 1 ? "" : "s"}`;
+        ui.linksView.replaceChildren();
+
+        for (const [name, data] of entries) {
+          const box = document.createElement("div");
+          box.className = "link-item";
+
+          const title = document.createElement("b");
+          title.textContent = `${name} (${data.type || "unknown"})`;
+          box.appendChild(title);
+
+          box.appendChild(document.createElement("br"));
+
+          const link = document.createElement("a");
+          link.href = data.stream;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          link.textContent = data.stream;
+          box.appendChild(link);
+
+          ui.linksView.appendChild(box);
+        }
+      }
+
+      function validateUserUrl(value) {
+        const trimmed = String(value || "").trim();
+        if (!trimmed) return { ok: false, error: "Please enter a URL." };
+        if (trimmed.length > 2048) return { ok: false, error: "URL is too long." };
+        try {
+          const parsed = new URL(trimmed);
+          if (!/^https?:$/i.test(parsed.protocol)) return { ok: false, error: "Only http(s) URLs are allowed." };
+          return { ok: true, value: parsed.toString() };
+        } catch {
+          return { ok: false, error: "Invalid URL format." };
+        }
+      }
+
+      function safeAbsoluteUrl(input, base = location.href) {
+        if (!input) return "";
+        try {
+          const url = new URL(String(input), base);
+          if (!/^https?:$/i.test(url.protocol)) return "";
+          return url.toString();
+        } catch {
+          return "";
+        }
+      }
+
+      function extFromUrl(url) {
+        const u = String(url || "").toLowerCase();
+        if (u.includes(".m3u8")) return ".m3u8";
+        if (u.includes(".mp4")) return ".mp4";
+        if (u.includes(".mpd")) return ".mpd";
+        return "";
+      }
+
+      function normalizeType(type) {
+        const t = String(type || "").toLowerCase().replace(/^[.]/, "");
+        if (t === "embed") return "embed";
+        if (t === "m3u8" || t === "mp4" || t === "mpd") return `.${t}`;
+        return extFromUrl(t) || ".mp4";
+      }
+
+      function isLikelyMediaUrl(url, type = "") {
+        if (!url) return false;
+        const typeNorm = String(type || "").toLowerCase();
+        if (typeNorm === "embed") return true;
+        return /\.(m3u8|mp4|mpd)(\?|#|$)/i.test(url) || /\/embed\//i.test(url);
+      }
+
+      function detectEpisodeNumber(sourceUrl, title, epTitle) {
+        const pool = [sourceUrl, title, epTitle].filter(Boolean).join(" ");
+        const m = pool.match(/(?:episode|ep)[^\d]{0,8}(\d+(?:\.\d+)?)/i) || pool.match(/\b(\d{1,4}(?:\.\d+)?)\b/);
+        return m?.[1] || "1";
+      }
+
+      function setStatus(message, type = "") {
+        ui.status.textContent = String(message || "");
+        ui.status.className = `status ${type}`.trim();
+      }
+
+      function writeTextOutput(text) {
+        ui.output.textContent = String(text || "");
+      }
+
+      function clearOutputOnly() {
+        lastOutputText = "";
+        ui.output.textContent = "";
+        ui.linksView.replaceChildren();
+        ui.countInfo.textContent = "0 links";
+      }
+
+      function clearAll() {
+        ui.input.value = "";
+        setStatus("", "");
+        clearOutputOnly();
+      }
+
+      async function copyOutput() {
+        if (!lastOutputText) {
+          setStatus("Nothing to copy yet.", "warn");
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(lastOutputText);
+          setStatus("Output copied to clipboard.", "ok");
+        } catch {
+          setStatus("Clipboard access failed. Copy manually from output area.", "warn");
+        }
+      }
+
+      function toggleBusy(isBusy) {
+        ui.processBtn.disabled = isBusy;
+        ui.clearBtn.disabled = isBusy;
+      }
+
+      function getReadableError(err) {
+        if (!err) return "Unknown error";
+        return typeof err === "string" ? err : String(err.message || err);
+      }
+    })();
+  </script>
+</body>
+</html>
