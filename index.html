@@ -137,6 +137,7 @@
       <h1>AniLINK Standalone Extractor</h1>
       <p>Enter an anime episode/stream page URL, then extract available media links.</p>
       <p>This app is self-contained and has no external code dependencies.</p>
+      <p><strong>Security note:</strong> if direct fetch is blocked, a public CORS proxy may be used; avoid sensitive/private URLs.</p>
     </section>
 
     <section class="card">
@@ -167,6 +168,7 @@
   <script>
     (() => {
       "use strict";
+      const MAX_URL_LENGTH = 2048;
 
       /**
        * Core adapted model from the userscript:
@@ -174,7 +176,7 @@
        */
       class Episode {
         constructor(number, animeTitle, links, thumbnail = "", epTitle = "") {
-          this.number = String(number || "1");
+          this.number = number === 0 ? "0" : String(number || "1");
           this.animeTitle = animeTitle || "Unknown Title";
           this.epTitle = epTitle || "";
           this.links = this.#normalizeLinks(links || {});
@@ -195,6 +197,7 @@
               ? cleaned.tracks
                   .map((t) => ({
                     file: safeAbsoluteUrl(t?.file) || "",
+                    // Keep userscript-compatible normalization: subtitle/caption variants become "caption".
                     kind: /^(caption|subtitle)s?$/i.test(t?.kind || "") ? "caption" : String(t?.kind || "unknown"),
                     label: String(t?.label || "")
                   }))
@@ -287,6 +290,7 @@
           if (!direct.ok) throw new Error(`HTTP ${direct.status}`);
           return await direct.text();
         } catch (directErr) {
+          // Security note: this fallback uses a third-party CORS proxy and should not be used for sensitive/private URLs.
           const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
           const proxy = await fetch(proxyUrl, { method: "GET", mode: "cors", credentials: "omit" });
           if (!proxy.ok) {
@@ -339,6 +343,7 @@
         }
 
         // 3) Script-based URLs
+        // Broad pattern by design: captures likely media URLs from inline scripts and may include some false positives.
         const mediaUrlPattern = /https?:\/\/[^\s"'`<>]+?\.(m3u8|mp4|mpd)(\?[^\s"'`<>]*)?/gi;
         for (const script of doc.querySelectorAll("script")) {
           const txt = script.textContent || "";
@@ -406,7 +411,7 @@
       function validateUserUrl(value) {
         const trimmed = String(value || "").trim();
         if (!trimmed) return { ok: false, error: "Please enter a URL." };
-        if (trimmed.length > 2048) return { ok: false, error: "URL is too long." };
+        if (trimmed.length > MAX_URL_LENGTH) return { ok: false, error: "URL is too long." };
         try {
           const parsed = new URL(trimmed);
           if (!/^https?:$/i.test(parsed.protocol)) return { ok: false, error: "Only http(s) URLs are allowed." };
@@ -451,6 +456,7 @@
 
       function detectEpisodeNumber(sourceUrl, title, epTitle) {
         const pool = [sourceUrl, title, epTitle].filter(Boolean).join(" ");
+        // Fallback is intentionally loose and may capture unrelated numbers if explicit "episode/ep" markers are absent.
         const m = pool.match(/(?:episode|ep)[^\d]{0,8}(\d+(?:\.\d+)?)/i) || pool.match(/\b(\d{1,4}(?:\.\d+)?)\b/);
         return m?.[1] || "1";
       }
