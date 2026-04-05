@@ -176,7 +176,7 @@
        */
       class Episode {
         constructor(number, animeTitle, links, thumbnail = "", epTitle = "") {
-          this.number = number === 0 ? "0" : String(number || "1");
+          this.number = String(number ?? "1");
           this.animeTitle = animeTitle || "Unknown Title";
           this.epTitle = epTitle || "";
           this.links = this.#normalizeLinks(links || {});
@@ -197,7 +197,7 @@
               ? cleaned.tracks
                   .map((t) => ({
                     file: safeAbsoluteUrl(t?.file) || "",
-                    // Keep userscript-compatible normalization: subtitle/caption variants become "caption".
+                    // Keep userscript-compatible normalization: subtitle(s)/caption(s) variants become "caption".
                     kind: /^(caption|subtitle)s?$/i.test(t?.kind || "") ? "caption" : String(t?.kind || "unknown"),
                     label: String(t?.label || "")
                   }))
@@ -344,7 +344,7 @@
 
         // 3) Script-based URLs
         // Broad pattern by design: captures likely media URLs from inline scripts and may include some false positives.
-        const mediaUrlPattern = /https?:\/\/[^\s"'`<>]+?\.(m3u8|mp4|mpd)(\?[^\s"'`<>]*)?/gi;
+        const mediaUrlPattern = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&()*+,;=%]+?\.(m3u8|mp4|mpd)(\?[A-Za-z0-9\-._~:/?#[\]@!$&()*+,;=%]*)?/gi;
         for (const script of doc.querySelectorAll("script")) {
           const txt = script.textContent || "";
           let m;
@@ -456,9 +456,18 @@
 
       function detectEpisodeNumber(sourceUrl, title, epTitle) {
         const pool = [sourceUrl, title, epTitle].filter(Boolean).join(" ");
-        // Fallback is intentionally loose and may capture unrelated numbers if explicit "episode/ep" markers are absent.
-        const m = pool.match(/(?:episode|ep)[^\d]{0,8}(\d+(?:\.\d+)?)/i) || pool.match(/\b(\d{1,4}(?:\.\d+)?)\b/);
-        return m?.[1] || "1";
+        const tagged = pool.match(/(?:episode|ep)[^\d]{0,8}(\d+(?:\.\d+)?)/i)?.[1];
+        if (tagged) return tagged;
+        // Fallback is intentionally loose but filters common false positives (year-like values and common resolution values).
+        const candidates = [...pool.matchAll(/\b(\d{1,4}(?:\.\d+)?)\b/g)].map((m) => m[1]);
+        for (const c of candidates) {
+          const n = Number(c);
+          if (!Number.isFinite(n)) continue;
+          if (n >= 1900 && n <= 2099) continue; // likely year
+          if ([360, 480, 540, 720, 900, 1080, 1440, 2160, 4320].includes(n)) continue; // likely resolution
+          return c;
+        }
+        return "1";
       }
 
       function setStatus(message, type = "") {
